@@ -882,6 +882,37 @@ func TestCIPollerPostBatchResults_PostFailureUnclaimsBatch(t *testing.T) {
 	h.AssertBatchUnclaimed(t, batch.ID)
 }
 
+func TestCIPollerPostBatchResults_PermanentGitHubAccessErrorFinalizesBatch(t *testing.T) {
+	h := newCIPollerHarness(t, "https://github.com/acme/api.git")
+	batch, _ := h.seedBatchWithJobs(t, 16, "head-sha", jobSpec{
+		Agent: "codex", ReviewType: "security", Status: "done", Output: "ok",
+	})
+	_, err := h.DB.IncrementBatchCompleted(batch.ID)
+	require.NoError(t, err)
+
+	postAttempts := 0
+	h.Poller.postPRCommentFn = func(string, int, string) error {
+		postAttempts++
+		return fmt.Errorf("create PR comment: %w", &googlegithub.ErrorResponse{
+			Response: &http.Response{StatusCode: http.StatusForbidden},
+			Message:  "Resource not accessible by integration",
+		})
+	}
+	statuses := h.CaptureCommitStatuses()
+
+	h.Poller.postBatchResults(batch)
+	h.AssertBatchState(t, batch.ID, 1, false)
+	require.NotEmpty(t, *statuses)
+	last := (*statuses)[len(*statuses)-1]
+	assert.Equal(t, "acme/api", last.Repo)
+	assert.Equal(t, "head-sha", last.SHA)
+	assert.Equal(t, "error", last.State)
+	assert.Equal(t, "Review failed to post", last.Desc)
+
+	h.Poller.postBatchResults(batch)
+	assert.Equal(t, 1, postAttempts, "finalized inaccessible batch should not be retried")
+}
+
 func TestCIPollerFindLocalRepo_PartialIdentityFallback(t *testing.T) {
 	h := newCIPollerHarness(t, "ssh://git@github.com/acme/api.git")
 
