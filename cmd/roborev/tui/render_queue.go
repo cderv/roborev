@@ -171,7 +171,7 @@ func (m model) queueVisibleRows() int {
 
 func (m model) canPaginate() bool {
 	return m.hasMore && !m.loadingMore && !m.loadingJobs &&
-		len(m.activeRepoFilter) <= 1 && m.activeBranchFilter != branchNone
+		m.activeBranchFilter != branchNone
 }
 
 // visibleSelectedRowIndex returns the index of selectedJobID within the
@@ -278,11 +278,12 @@ func (m model) renderQueueView() string {
 	b.WriteString("\x1b[K\n") // Clear to end of line
 
 	if !compact {
-		// Status line - use server-side aggregate counts for paginated views,
-		// fall back to client-side counting for multi-repo filters (which load all jobs)
+		// Status line - use server-side aggregate counts for paginated views
+		// (including multi-repo display names, scoped via an IN clause). Only
+		// the "(none)" branch sentinel still loads all jobs to count locally.
 		var statusLine string
 		var done, closed, open int
-		if len(m.activeRepoFilter) > 1 || m.activeBranchFilter == branchNone {
+		if m.activeBranchFilter == branchNone {
 			// Client-side filtered views load all jobs, so count locally
 			for _, job := range m.jobs {
 				if len(m.activeRepoFilter) > 0 && !m.repoMatchesFilter(job.RepoPath) {
@@ -719,7 +720,7 @@ func (m model) renderQueueView() string {
 		if len(rows) > visibleRows || m.hasMore || m.loadingMore {
 			if m.loadingMore {
 				scrollInfo = fmt.Sprintf("[showing %d-%d of %d] Loading more...", start+1, end, len(rows))
-			} else if m.hasMore && len(m.activeRepoFilter) <= 1 {
+			} else if m.hasMore && m.activeBranchFilter != branchNone {
 				scrollInfo = fmt.Sprintf("[showing %d-%d of %d+] scroll down to load more", start+1, end, len(rows))
 			} else if len(rows) > visibleRows {
 				scrollInfo = fmt.Sprintf("[showing %d-%d of %d]", start+1, end, len(rows))

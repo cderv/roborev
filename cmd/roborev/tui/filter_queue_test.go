@@ -1,10 +1,14 @@
 package tui
 
 import (
+	"encoding/json"
+	"net/http"
+	"strconv"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/roborev/internal/storage"
 )
@@ -82,7 +86,45 @@ func TestTUIFilterToZeroVisibleJobs(t *testing.T) {
 	assert.EqualValues(t, 0, m3.selectedJobID)
 }
 
+func TestTUIFilterChangeFetchesFirstPageOnly(t *testing.T) {
+	var gotLimit string
+	var gotRepo string
+	_, m := mockServerModel(t, func(w http.ResponseWriter, r *http.Request) {
+		gotLimit = r.URL.Query().Get("limit")
+		gotRepo = r.URL.Query().Get("repo")
+		assert.NoError(t, json.NewEncoder(w).Encode(jobsPageResult{}))
+	})
+	m.currentView = viewFilter
+	m.heightDetected = true
+	m.height = 40
+	setupFilterTree(&m, []treeFilterNode{
+		{
+			name:      "kata",
+			rootPaths: []string{"/workspace/kata"},
+			count:     1429,
+		},
+	})
+	m.filterSelectedIdx = 1
+	m.jobs = make([]storage.ReviewJob, 1429)
+	m.loadingJobs = false
+
+	m2, cmd := pressSpecial(m, tea.KeyEnter)
+	require.NotNil(t, cmd)
+	msg := cmd()
+	_, ok := msg.(jobsMsg)
+	require.True(t, ok)
+
+	assert.Empty(t, m2.jobs)
+	assert.Equal(t, "/workspace/kata", gotRepo)
+	assert.Equal(t, strconv.Itoa(m2.queueVisibleRows()+queuePrefetchBuffer), gotLimit)
+}
+
 func TestTUIMultiPathFilterStatusCounts(t *testing.T) {
+	// A display name spanning multiple repos is scoped server-side via an IN
+	// clause and paginated, so the status counts come from the server
+	// aggregate (jobStats), not from counting the loaded page. The loaded
+	// page below is deliberately smaller and would yield different counts if
+	// the line still tallied client-side.
 	m := newModel(localhostEndpoint, withExternalIODisabled())
 	m.height = 20
 	m.daemonVersion = "test"
@@ -93,11 +135,8 @@ func TestTUIMultiPathFilterStatusCounts(t *testing.T) {
 	m.jobs = []storage.ReviewJob{
 		{ID: 1, RepoPath: "/path/to/backend-dev", Status: storage.JobStatusDone, Closed: &addrTrue},
 		{ID: 2, RepoPath: "/path/to/backend-prod", Status: storage.JobStatusDone, Closed: &addrFalse},
-		{ID: 3, RepoPath: "/path/to/backend-prod", Status: storage.JobStatusDone, Closed: &addrFalse},
-		{ID: 4, RepoPath: "/path/to/frontend", Status: storage.JobStatusDone, Closed: &addrTrue},
-		{ID: 5, RepoPath: "/path/to/frontend", Status: storage.JobStatusDone, Closed: &addrTrue},
 	}
-
+	m.jobStats = storage.JobStats{Done: 3, Closed: 1, Open: 2}
 	m.activeRepoFilter = []string{"/path/to/backend-dev", "/path/to/backend-prod"}
 
 	output := m.renderQueueView()
@@ -171,7 +210,7 @@ func TestTUIBranchFilterCombinedWithRepoFilter(t *testing.T) {
 	assert.False(t, len(visible) > 0 && (visible[0].RepoPath != "/path/to/repo-a" || visible[0].Branch != "main"))
 }
 
-func TestTUINavigateDownNoLoadMoreWhenBranchFiltered(t *testing.T) {
+func TestTUINavigateDownLoadsMoreWhenBranchFiltered(t *testing.T) {
 	m := newModel(localhostEndpoint, withExternalIODisabled())
 
 	m.jobs = []storage.ReviewJob{makeJob(1, withBranch("feature"))}
@@ -179,16 +218,17 @@ func TestTUINavigateDownNoLoadMoreWhenBranchFiltered(t *testing.T) {
 	m.selectedJobID = 1
 	m.hasMore = true
 	m.loadingMore = false
+	m.loadingJobs = false
 	m.activeBranchFilter = "feature"
 	m.currentView = viewQueue
 
 	m2, cmd := pressSpecial(m, tea.KeyDown)
 
-	assert.False(t, m2.loadingMore)
-	assert.Nil(t, cmd)
+	assert.True(t, m2.loadingMore)
+	assert.NotNil(t, cmd)
 }
 
-func TestTUINavigateJKeyNoLoadMoreWhenBranchFiltered(t *testing.T) {
+func TestTUINavigateJKeyLoadsMoreWhenBranchFiltered(t *testing.T) {
 	m := newModel(localhostEndpoint, withExternalIODisabled())
 
 	m.jobs = []storage.ReviewJob{makeJob(1, withBranch("feature"))}
@@ -196,16 +236,17 @@ func TestTUINavigateJKeyNoLoadMoreWhenBranchFiltered(t *testing.T) {
 	m.selectedJobID = 1
 	m.hasMore = true
 	m.loadingMore = false
+	m.loadingJobs = false
 	m.activeBranchFilter = "feature"
 	m.currentView = viewQueue
 
 	m2, cmd := pressKey(m, 'j')
 
-	assert.False(t, m2.loadingMore)
-	assert.Nil(t, cmd)
+	assert.True(t, m2.loadingMore)
+	assert.NotNil(t, cmd)
 }
 
-func TestTUIPageDownNoLoadMoreWhenBranchFiltered(t *testing.T) {
+func TestTUIPageDownLoadsMoreWhenBranchFiltered(t *testing.T) {
 	m := newModel(localhostEndpoint, withExternalIODisabled())
 
 	m.jobs = []storage.ReviewJob{makeJob(1, withBranch("feature"))}
@@ -213,14 +254,15 @@ func TestTUIPageDownNoLoadMoreWhenBranchFiltered(t *testing.T) {
 	m.selectedJobID = 1
 	m.hasMore = true
 	m.loadingMore = false
+	m.loadingJobs = false
 	m.activeBranchFilter = "feature"
 	m.currentView = viewQueue
 	m.height = 20
 
 	m2, cmd := pressSpecial(m, tea.KeyPgDown)
 
-	assert.False(t, m2.loadingMore)
-	assert.Nil(t, cmd)
+	assert.True(t, m2.loadingMore)
+	assert.NotNil(t, cmd)
 }
 
 func TestTUIBranchFilterClearTriggersRefetch(t *testing.T) {

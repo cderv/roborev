@@ -510,7 +510,7 @@ func (m model) handleDownKey() (tea.Model, tea.Cmd) {
 		} else if m.canPaginate() {
 			m.loadingMore = true
 			return m, m.fetchMoreJobs()
-		} else if !m.hasMore || len(m.activeRepoFilter) > 1 {
+		} else if !m.hasMore || m.activeBranchFilter == branchNone {
 			m.setFlash("No older review", 2*time.Second, viewQueue)
 		}
 	case viewReview:
@@ -652,22 +652,13 @@ func (m model) handleEscKey() (tea.Model, tea.Cmd) {
 	if m.currentView == viewQueue && len(m.filterStack) > 0 {
 		popped := m.popFilter()
 		if popped == filterTypeRepo || popped == filterTypeBranch {
-			m.hasMore = false
-			m.selectedIdx = -1
-			m.selectedJobID = 0
-			m.fetchSeq++
-			m.loadingJobs = true
+			m.resetQueueForFilterChange()
 			return m, m.fetchJobs()
 		}
 		return m, nil
 	} else if m.currentView == viewQueue && m.hideClosed {
 		m.hideClosed = false
-		m.queueColGen++
-		m.hasMore = false
-		m.selectedIdx = -1
-		m.selectedJobID = 0
-		m.fetchSeq++
-		m.loadingJobs = true
+		m.resetQueueForFilterChange()
 		return m, m.fetchJobs()
 	} else if m.currentView == viewReview {
 		// If fix panel is open (unfocused), esc closes it rather than leaving the review
