@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -87,6 +88,9 @@ type detachedDaemonOptions struct {
 	Stdout          io.Writer
 	Stderr          io.Writer
 	RefuseEphemeral bool
+	// AfterStart, when set, runs with the launched command after a
+	// successful Start. Used by tests to inspect process attributes.
+	AfterStart func(*exec.Cmd)
 }
 
 // probeDaemonWithRetry probes ep several times before reporting failure, so
